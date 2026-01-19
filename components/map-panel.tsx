@@ -128,11 +128,16 @@ export function MapPanel({ days, currentUserId, travelers }: MapPanelProps) {
             <Calendar className="w-5 h-5 text-muted-foreground" />
             <CardTitle className="text-lg">{currentDay?.title}</CardTitle>
             <span className="text-sm text-muted-foreground">
-              {currentDay?.date && new Date(currentDay.date).toLocaleDateString("en-US", {
-                month: "long",
-                day: "numeric",
-                year: "numeric"
-              })}
+              {currentDay?.date && (() => {
+                // Parse as local date to avoid timezone issues
+                const [year, month, day] = currentDay.date.split('-').map(Number);
+                const date = new Date(year, month - 1, day);
+                return date.toLocaleDateString("en-US", {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric"
+                });
+              })()}
             </span>
           </div>
         </CardHeader>
