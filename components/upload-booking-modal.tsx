@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react"
+import React, { useRef, useEffect } from "react"
 
 import { useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Upload, Loader2, Camera, Plane, UtensilsCrossed, Hotel as HotelIcon, Compass } from "lucide-react";
+import { Upload, Loader2, Camera, Plane, UtensilsCrossed, Hotel as HotelIcon, Compass, AlertCircle } from "lucide-react";
 import type { Traveler } from "@/lib/trip-data";
 import { cn } from "@/lib/utils";
 
@@ -62,6 +62,23 @@ export function UploadBookingModal({
   const [extractedData, setExtractedData] = useState<ExtractedBooking | null>(null);
   const [selectedAttendees, setSelectedAttendees] = useState<string[]>([currentUserId]);
   const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+
+  // Track mounted state to prevent memory leaks
+  const isMountedRef = useRef(true);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Abort any pending fetch request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -69,11 +86,22 @@ export function UploadBookingModal({
 
     setUploading(true);
     setExtracting(true);
+    setExtractionError(null);
+
+    // Abort any previous request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
     try {
       // Convert file to base64 data URL for API
       const reader = new FileReader();
       reader.onloadend = async () => {
+        // Check if component is still mounted
+        if (!isMountedRef.current) return;
+
         const dataUrl = reader.result as string;
         setImageUrl(dataUrl);
 
@@ -83,12 +111,17 @@ export function UploadBookingModal({
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ imageUrl: dataUrl }),
+            signal,
           });
+
+          // Check if component is still mounted after fetch
+          if (!isMountedRef.current) return;
 
           if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
             console.log("AI extraction unavailable:", errorData.error);
-            // Fall back to manual entry without throwing error
+            // Show error message and fall back to manual entry
+            setExtractionError(errorData.error || "AI extraction failed. Please fill in details manually.");
             setExtractedData({
               type: "flight",
               date: "",
@@ -96,27 +129,43 @@ export function UploadBookingModal({
             });
           } else {
             const data = await response.json();
-            setExtractedData(data);
+            if (isMountedRef.current) {
+              setExtractedData(data);
+              setExtractionError(null);
+            }
           }
         } catch (extractError) {
+          // Ignore abort errors
+          if (extractError instanceof Error && extractError.name === "AbortError") {
+            return;
+          }
           console.error("Extraction failed:", extractError);
-          // Fall back to manual entry
+          // Check if component is still mounted
+          if (!isMountedRef.current) return;
+          // Show error and fall back to manual entry
+          setExtractionError("Failed to connect to AI service. Please fill in details manually.");
           setExtractedData({
             type: "flight",
             date: "",
             time: "",
           });
         } finally {
-          setExtracting(false);
+          if (isMountedRef.current) {
+            setExtracting(false);
+          }
         }
       };
       reader.readAsDataURL(file);
     } catch (error) {
       console.error("Upload failed:", error);
-      alert("Failed to upload screenshot. Please try again.");
-      setExtracting(false);
+      if (isMountedRef.current) {
+        alert("Failed to upload screenshot. Please try again.");
+        setExtracting(false);
+      }
     } finally {
-      setUploading(false);
+      if (isMountedRef.current) {
+        setUploading(false);
+      }
     }
   };
 
@@ -222,6 +271,14 @@ export function UploadBookingModal({
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="w-4 h-4 animate-spin" />
               <span>Extracting booking information with AI...</span>
+            </div>
+          )}
+
+          {/* AI Extraction Error */}
+          {extractionError && !extracting && (
+            <div className="flex items-center gap-2 p-3 text-sm bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200 rounded-lg border border-amber-200 dark:border-amber-800">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{extractionError}</span>
             </div>
           )}
 

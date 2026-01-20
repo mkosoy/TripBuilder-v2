@@ -43,10 +43,10 @@ interface MustDoDetailModalProps {
   travelers: Traveler[];
   days: DayItinerary[];
   currentUserId: string;
-  onVote: () => void;
-  onAddComment: (comment: string) => void;
-  onAddToItinerary: (dayDate: string) => void;
-  onDelete?: () => void;
+  onVote: () => void | Promise<void>;
+  onAddComment: (comment: string) => void | Promise<void>;
+  onAddToItinerary: (dayDate: string) => void | Promise<void>;
+  onDelete?: () => void | Promise<void>;
 }
 
 export function MustDoDetailModal({
@@ -63,6 +63,8 @@ export function MustDoDetailModal({
 }: MustDoDetailModalProps) {
   const [comment, setComment] = useState("");
   const [selectedDay, setSelectedDay] = useState<string>("");
+  const [isAddingToItinerary, setIsAddingToItinerary] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const traveler = travelers.find((t) => t.id === mustDo.travelerId);
   const hasVoted = mustDo.votes.includes(currentUserId);
@@ -85,9 +87,27 @@ export function MustDoDetailModal({
     setComment("");
   };
 
-  const handleAddToItinerary = () => {
-    if (!selectedDay) return;
-    onAddToItinerary(selectedDay);
+  const handleAddToItinerary = async () => {
+    if (!selectedDay || isAddingToItinerary) return;
+    setIsAddingToItinerary(true);
+    try {
+      await onAddToItinerary(selectedDay);
+    } finally {
+      setIsAddingToItinerary(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!onDelete || isDeleting) return;
+    if (!confirm(`Delete "${mustDo.name}"? This cannot be undone.`)) return;
+
+    setIsDeleting(true);
+    try {
+      await onDelete();
+      onOpenChange(false);
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   return (
@@ -223,9 +243,9 @@ export function MustDoDetailModal({
                     </SelectContent>
                   </Select>
                 </div>
-                <Button onClick={handleAddToItinerary} disabled={!selectedDay}>
+                <Button onClick={handleAddToItinerary} disabled={!selectedDay || isAddingToItinerary}>
                   <Calendar className="w-4 h-4 mr-2" />
-                  Add to Day
+                  {isAddingToItinerary ? "Adding..." : "Add to Day"}
                 </Button>
               </div>
             </div>
@@ -312,15 +332,11 @@ export function MustDoDetailModal({
             {onDelete && mustDo.travelerId === currentUserId && (
               <Button
                 variant="destructive"
-                onClick={() => {
-                  if (confirm(`Delete "${mustDo.name}"? This cannot be undone.`)) {
-                    onDelete();
-                    onOpenChange(false);
-                  }
-                }}
+                onClick={handleDelete}
+                disabled={isDeleting}
               >
                 <Trash2 className="w-4 h-4 mr-2" />
-                Delete
+                {isDeleting ? "Deleting..." : "Delete"}
               </Button>
             )}
           </div>

@@ -27,7 +27,7 @@ interface AddMustDoModalProps {
   onOpenChange: (open: boolean) => void;
   travelers: Traveler[];
   currentUserId: string;
-  onAdd: (mustDo: Omit<MustDoItem, "id" | "votes" | "comments" | "addedToItinerary">) => void;
+  onAdd: (mustDo: Omit<MustDoItem, "id" | "votes" | "comments" | "addedToItinerary">) => void | Promise<void>;
 }
 
 export function AddMustDoModal({
@@ -45,31 +45,37 @@ export function AddMustDoModal({
   const [bookingUrl, setBookingUrl] = useState("");
   const [priceRange, setPriceRange] = useState<"$" | "$$" | "$$$" | "$$$$">("$$");
   const [notes, setNotes] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = () => {
-    if (!name.trim()) return;
+  const handleSubmit = async () => {
+    if (!name.trim() || isSubmitting) return;
 
-    onAdd({
-      travelerId: currentUserId,
-      name: name.trim(),
-      type,
-      destination,
-      description: description.trim() || undefined,
-      address: address.trim() || undefined,
-      bookingUrl: bookingUrl.trim() || undefined,
-      priceRange,
-      notes: notes.trim() || undefined,
-    });
+    setIsSubmitting(true);
+    try {
+      await onAdd({
+        travelerId: currentUserId,
+        name: name.trim(),
+        type,
+        destination,
+        description: description.trim() || undefined,
+        address: address.trim() || undefined,
+        bookingUrl: bookingUrl.trim() || undefined,
+        priceRange,
+        notes: notes.trim() || undefined,
+      });
 
-    // Reset form
-    setName("");
-    setDescription("");
-    setType("attraction");
-    setDestination("reykjavik");
-    setAddress("");
-    setBookingUrl("");
-    setPriceRange("$$");
-    setNotes("");
+      // Reset form
+      setName("");
+      setDescription("");
+      setType("attraction");
+      setDestination("reykjavik");
+      setAddress("");
+      setBookingUrl("");
+      setPriceRange("$$");
+      setNotes("");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -192,11 +198,11 @@ export function AddMustDoModal({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={handleSubmit} disabled={!name.trim()}>
-            Add Must-Do
+          <Button onClick={handleSubmit} disabled={!name.trim() || isSubmitting}>
+            {isSubmitting ? "Adding..." : "Add Must-Do"}
           </Button>
         </DialogFooter>
       </DialogContent>

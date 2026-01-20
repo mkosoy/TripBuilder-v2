@@ -43,6 +43,18 @@ export function ProfileSelector({
 
   const currentUser = travelers.find((t) => t.id === currentUserId);
 
+  // Debug: Log avatar data on mount
+  if (typeof window !== 'undefined') {
+    console.log('[ProfileSelector] Travelers with avatars:',
+      travelers.map(t => ({
+        name: t.name,
+        hasAvatar: !!t.avatar,
+        avatarLength: t.avatar?.length || 0,
+        avatarPrefix: t.avatar?.substring(0, 50) || 'none'
+      }))
+    );
+  }
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -84,7 +96,15 @@ export function ProfileSelector({
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="flex items-center gap-2 h-auto py-1 px-2">
             <Avatar className="h-8 w-8">
-              <AvatarImage src={currentUser?.avatar || "/placeholder.svg"} alt={currentUser?.name} />
+              {currentUser?.avatar && currentUser.avatar.startsWith('data:') ? (
+                <img
+                  src={currentUser.avatar}
+                  alt={currentUser.name}
+                  className="aspect-square size-full object-cover rounded-full"
+                />
+              ) : (
+                <AvatarImage src={currentUser?.avatar || "/placeholder.svg"} alt={currentUser?.name} />
+              )}
               <AvatarFallback style={{ backgroundColor: currentUser?.color }}>
                 {currentUser?.name.charAt(0)}
               </AvatarFallback>

@@ -64,7 +64,15 @@ export function ProfilePage({
         <CardContent className="pt-6">
           <div className="flex items-center gap-4">
             <Avatar className="h-20 w-20">
-              <AvatarImage src={traveler.avatar || "/placeholder.svg"} alt={traveler.name} />
+              {traveler.avatar && traveler.avatar.startsWith('data:') ? (
+                <img
+                  src={traveler.avatar}
+                  alt={traveler.name}
+                  className="aspect-square size-full object-cover rounded-full"
+                />
+              ) : (
+                <AvatarImage src={traveler.avatar || "/placeholder.svg"} alt={traveler.name} />
+              )}
               <AvatarFallback
                 className="text-white text-xl font-medium"
                 style={{ backgroundColor: traveler.color }}

@@ -11,10 +11,10 @@ BEGIN
 
     -- Insert travelers with proper UUIDs (Supabase will auto-generate them)
     INSERT INTO public.travelers (trip_id, name, avatar, color) VALUES
-        (v_trip_id, 'Mark', '/images/image.png', 'oklch(0.45 0.15 250)'),
-        (v_trip_id, 'Kylie', '/images/image.png', 'oklch(0.55 0.18 180)'),
-        (v_trip_id, 'Derek', '/images/image.png', 'oklch(0.65 0.12 50)'),
-        (v_trip_id, 'Julia', '/images/image.png', 'oklch(0.60 0.15 320)');
+        (v_trip_id, 'Mark', '', 'oklch(0.45 0.15 250)'),
+        (v_trip_id, 'Kylie', '', 'oklch(0.55 0.18 180)'),
+        (v_trip_id, 'Derek', '', 'oklch(0.65 0.12 50)'),
+        (v_trip_id, 'Julia', '', 'oklch(0.60 0.15 320)');
 
     RAISE NOTICE 'Travelers inserted successfully for trip %', v_trip_id;
 END $$;

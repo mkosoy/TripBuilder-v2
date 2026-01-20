@@ -28,7 +28,7 @@ import { Plus, Bookmark, Sparkles } from "lucide-react";
 interface AddActivityModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd: (activity: Activity) => void;
+  onAdd: (activity: Activity) => void | Promise<void>;
   destination: Destination;
   alternatives: Activity[];
   savedPlaces: SavedPlace[];
@@ -62,46 +62,64 @@ export function AddActivityModal({
     address: "",
     bookingUrl: "",
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isCopenhagen = destination === "copenhagen";
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.name.trim()) return;
+    if (!formData.name.trim() || isSubmitting) return;
 
-    onAdd({
-      id: `custom-${Date.now()}`,
-      name: formData.name,
-      type: formData.type,
-      time: formData.time || undefined,
-      description: formData.description,
-      address: formData.address || undefined,
-      bookingUrl: formData.bookingUrl || undefined,
-    });
+    setIsSubmitting(true);
+    try {
+      await onAdd({
+        id: `custom-${Date.now()}`,
+        name: formData.name,
+        type: formData.type,
+        time: formData.time || undefined,
+        description: formData.description,
+        address: formData.address || undefined,
+        bookingUrl: formData.bookingUrl || undefined,
+      });
 
-    setFormData({
-      name: "",
-      type: "food",
-      time: "",
-      description: "",
-      address: "",
-      bookingUrl: "",
-    });
+      setFormData({
+        name: "",
+        type: "food",
+        time: "",
+        description: "",
+        address: "",
+        bookingUrl: "",
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleAddFromSuggestion = (activity: Activity) => {
-    onAdd(activity);
+  const handleAddFromSuggestion = async (activity: Activity) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onAdd(activity);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const handleAddFromSaved = (place: SavedPlace) => {
-    onAdd({
-      id: `from-saved-${Date.now()}`,
-      name: place.name,
-      type: place.type,
-      description: place.description || "",
-      priceRange: place.priceRange,
-      bookingUrl: place.bookingUrl,
-    });
+  const handleAddFromSaved = async (place: SavedPlace) => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      await onAdd({
+        id: `from-saved-${Date.now()}`,
+        name: place.name,
+        type: place.type,
+        description: place.description || "",
+        priceRange: place.priceRange,
+        bookingUrl: place.bookingUrl,
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -205,6 +223,7 @@ export function AddActivityModal({
 
               <Button
                 type="submit"
+                disabled={isSubmitting}
                 className={cn(
                   "w-full",
                   isCopenhagen
@@ -212,7 +231,7 @@ export function AddActivityModal({
                     : "bg-iceland hover:bg-iceland/90"
                 )}
               >
-                Add Activity
+                {isSubmitting ? "Adding..." : "Add Activity"}
               </Button>
             </form>
           </TabsContent>

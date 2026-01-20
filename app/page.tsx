@@ -60,36 +60,19 @@ export default function TripItinerary() {
     try {
       const data = await TripService.loadTripData();
 
-      // If database is empty (no days), trigger migration
-      if (data.days.length === 0 || data.days.length < 12) {
-        console.log("[v0] Database incomplete, running migration...");
-        const migrateResponse = await fetch("/api/migrate-data", {
-          method: "POST",
-        });
-        
-        if (migrateResponse.ok) {
-          const migrateResult = await migrateResponse.json();
-          console.log("[v0] Migration complete:", migrateResult.message);
-          // Reload data after migration
-          const newData = await TripService.loadTripData();
-          if (newData.travelers.length > 0) {
-            setTravelers(newData.travelers);
-            setCurrentUserId(newData.travelers[0].id);
-          }
-          if (newData.hotels.length > 0) setHotels(newData.hotels);
-          if (newData.flights.length > 0) setFlightsList(newData.flights);
-          if (newData.days.length > 0) setDays(newData.days);
-          if (newData.mustDos.length > 0) setMustDos(newData.mustDos);
-          if (newData.savedPlaces.length > 0) setSaved(newData.savedPlaces);
-          setTripId("default-trip");
-          setLoading(false);
-          return;
-        }
-      }
+      // Migration disabled - database already has data
+      // To reset data, run SQL scripts manually in Supabase
+      console.log("[v0] Data loaded - days:", data.days.length, "travelers:", data.travelers.length);
 
       if (data.travelers.length > 0) {
         setTravelers(data.travelers);
         console.log("[v0] Loaded travelers from DB:", data.travelers);
+        console.log("[v0] Avatar debug:", data.travelers.map(t => ({
+          name: t.name,
+          hasAvatar: !!t.avatar,
+          avatarLength: t.avatar?.length || 0,
+          avatarPrefix: t.avatar?.substring(0, 100) || 'none'
+        })));
         console.log("[v0] Setting currentUserId to:", data.travelers[0].id);
         setCurrentUserId(data.travelers[0].id);
       }
@@ -124,26 +107,74 @@ export default function TripItinerary() {
 
   const currentDay = days[selectedDayIndex];
 
-  const handleSwapActivity = (dayIndex: number, activityId: string, newActivity: Activity) => {
+  const handleSwapActivity = async (dayIndex: number, activityId: string, newActivity: Activity) => {
+    const day = days[dayIndex];
+    if (!day?.id) {
+      console.error("[v0] Cannot swap activity: day has no ID");
+      return;
+    }
+
+    // Store original for rollback
+    const originalActivities = day.activities;
+
+    // Calculate new activities array
+    const updatedActivities = day.activities.map((a) =>
+      a.id === activityId ? { ...newActivity, id: activityId } : a
+    );
+
+    // Update UI immediately
     setDays((prev) => {
       const updated = [...prev];
-      const day = { ...updated[dayIndex] };
-      day.activities = day.activities.map((a) =>
-        a.id === activityId ? { ...newActivity, id: activityId } : a
-      );
-      updated[dayIndex] = day;
+      updated[dayIndex] = { ...updated[dayIndex], activities: updatedActivities };
       return updated;
     });
+
+    // Save to database
+    try {
+      await TripService.saveDayActivities(day.id, updatedActivities);
+    } catch (error) {
+      console.error("[v0] Error saving swapped activity:", error);
+      // Rollback on error
+      setDays((prev) => {
+        const updated = [...prev];
+        updated[dayIndex] = { ...updated[dayIndex], activities: originalActivities };
+        return updated;
+      });
+    }
   };
 
-  const handleRemoveActivity = (dayIndex: number, activityId: string) => {
+  const handleRemoveActivity = async (dayIndex: number, activityId: string) => {
+    const day = days[dayIndex];
+    if (!day?.id) {
+      console.error("[v0] Cannot remove activity: day has no ID");
+      return;
+    }
+
+    // Store original for rollback
+    const originalActivities = day.activities;
+
+    // Calculate new activities array
+    const updatedActivities = day.activities.filter((a) => a.id !== activityId);
+
+    // Update UI immediately
     setDays((prev) => {
       const updated = [...prev];
-      const day = { ...updated[dayIndex] };
-      day.activities = day.activities.filter((a) => a.id !== activityId);
-      updated[dayIndex] = day;
+      updated[dayIndex] = { ...updated[dayIndex], activities: updatedActivities };
       return updated;
     });
+
+    // Save to database
+    try {
+      await TripService.saveDayActivities(day.id, updatedActivities);
+    } catch (error) {
+      console.error("[v0] Error removing activity:", error);
+      // Rollback on error
+      setDays((prev) => {
+        const updated = [...prev];
+        updated[dayIndex] = { ...updated[dayIndex], activities: originalActivities };
+        return updated;
+      });
+    }
   };
 
   const handleAddActivity = async (dayIndex: number, activity: Activity) => {
@@ -184,8 +215,19 @@ export default function TripItinerary() {
     updatedActivity: Activity,
     moveToDayIndex?: number
   ) => {
+    // Capture day IDs before state update to avoid stale closure
+    const sourceDayId = days[dayIndex]?.id;
+    const targetDayId = moveToDayIndex !== undefined ? days[moveToDayIndex]?.id : undefined;
+
+    if (!sourceDayId) {
+      console.error("[v0] Cannot edit activity: source day has no ID");
+      return;
+    }
+
+    // Store original for rollback
+    const originalDays = days;
     let updatedDays: DayItinerary[];
-    
+
     setDays((prev) => {
       const updated = [...prev];
 
@@ -212,27 +254,45 @@ export default function TripItinerary() {
       updatedDays = updated;
       return updated;
     });
-    
-    // Save to Supabase
+
+    // Save to Supabase using captured day IDs
     try {
-      if (moveToDayIndex !== undefined && moveToDayIndex !== dayIndex) {
-        await TripService.saveDayActivities(days[dayIndex].id, updatedDays[dayIndex].activities);
-        await TripService.saveDayActivities(days[moveToDayIndex].id, updatedDays[moveToDayIndex].activities);
+      if (moveToDayIndex !== undefined && moveToDayIndex !== dayIndex && targetDayId) {
+        await TripService.saveDayActivities(sourceDayId, updatedDays[dayIndex].activities);
+        await TripService.saveDayActivities(targetDayId, updatedDays[moveToDayIndex].activities);
       } else {
-        await TripService.saveDayActivities(days[dayIndex].id, updatedDays[dayIndex].activities);
+        await TripService.saveDayActivities(sourceDayId, updatedDays[dayIndex].activities);
       }
-      console.log("[v0] Activity edits saved to Supabase");
     } catch (error) {
       console.error("[v0] Error saving activity edits:", error);
+      // Rollback on error
+      setDays(originalDays);
     }
   };
 
-  const handleAddSavedPlace = (place: SavedPlace) => {
-    setSaved((prev) => [...prev, { ...place, id: `saved-${Date.now()}` }]);
+  const handleAddSavedPlace = async (place: SavedPlace) => {
+    // Save to database
+    const savedPlace = await TripService.addSavedPlace(place);
+    if (savedPlace) {
+      setSaved((prev) => [...prev, savedPlace]);
+    }
   };
 
-  const handleRemoveSavedPlace = (id: string) => {
+  const handleRemoveSavedPlace = async (id: string) => {
+    // Store original for rollback
+    const originalSaved = saved;
+
+    // Update UI immediately
     setSaved((prev) => prev.filter((p) => p.id !== id));
+
+    // Delete from database
+    try {
+      await TripService.deleteSavedPlace(id);
+    } catch (error) {
+      console.error("[v0] Error deleting saved place:", error);
+      // Rollback on error
+      setSaved(originalSaved);
+    }
   };
 
   const handleEditHotel = async (destination: "copenhagen" | "reykjavik", updatedHotel: Hotel) => {
@@ -249,67 +309,87 @@ export default function TripItinerary() {
     }
   };
 
-  const handleVoteMustDo = (mustDoId: string, travelerId: string) => {
+  const handleVoteMustDo = async (mustDoId: string, travelerId: string) => {
+    const mustDo = mustDos.find((m) => m.id === mustDoId);
+    if (!mustDo) return;
+
+    // Store original for rollback
+    const originalVotes = mustDo.votes;
+
+    const hasVoted = mustDo.votes.includes(travelerId);
+    const newVotes = hasVoted
+      ? mustDo.votes.filter((v) => v !== travelerId)
+      : [...mustDo.votes, travelerId];
+
+    // Update UI immediately
     setMustDos((prev) =>
-      prev.map((m) => {
-        if (m.id === mustDoId) {
-          const hasVoted = m.votes.includes(travelerId);
-          return {
-            ...m,
-            votes: hasVoted
-              ? m.votes.filter((v) => v !== travelerId)
-              : [...m.votes, travelerId],
-          };
-        }
-        return m;
-      })
+      prev.map((m) =>
+        m.id === mustDoId ? { ...m, votes: newVotes } : m
+      )
     );
+
+    // Save to database
+    try {
+      await TripService.updateMustDo(mustDoId, { votes: newVotes });
+    } catch (error) {
+      console.error("[v0] Error saving vote:", error);
+      // Rollback on error
+      setMustDos((prev) =>
+        prev.map((m) =>
+          m.id === mustDoId ? { ...m, votes: originalVotes } : m
+        )
+      );
+    }
   };
 
-  const handleAddComment = (mustDoId: string, travelerId: string, comment: string) => {
+  const handleAddComment = async (mustDoId: string, travelerId: string, comment: string) => {
+    // Update UI immediately with temporary ID
+    const tempComment = {
+      id: `comment-${Date.now()}`,
+      travelerId,
+      text: comment,
+      timestamp: Date.now(),
+    };
+
     setMustDos((prev) =>
-      prev.map((m) => {
-        if (m.id === mustDoId) {
-          return {
-            ...m,
-            comments: [
-              ...m.comments,
-              {
-                id: `comment-${Date.now()}`,
-                travelerId,
-                text: comment,
-                timestamp: Date.now(),
-              },
-            ],
-          };
-        }
-        return m;
-      })
+      prev.map((m) =>
+        m.id === mustDoId
+          ? { ...m, comments: [...m.comments, tempComment] }
+          : m
+      )
     );
+
+    // Save to database
+    try {
+      await TripService.addMustDoComment(mustDoId, travelerId, comment);
+    } catch (error) {
+      console.error("[v0] Error saving comment:", error);
+    }
   };
 
-  const handleAddMustDo = (
+  const handleAddMustDo = async (
     mustDo: Omit<MustDoItem, "id" | "votes" | "comments" | "addedToItinerary">
   ) => {
-    setMustDos((prev) => [
-      ...prev,
-      {
-        ...mustDo,
-        id: `mustdo-${Date.now()}`,
-        votes: [],
-        comments: [],
-        addedToItinerary: false,
-      },
-    ]);
+    // Save to database
+    const savedMustDo = await TripService.addMustDo(mustDo);
+    if (savedMustDo) {
+      setMustDos((prev) => [...prev, savedMustDo]);
+    }
   };
 
-  const handleAddToItinerary = (mustDoId: string, dayDate: string) => {
+  const handleAddToItinerary = async (mustDoId: string, dayDate: string) => {
     const mustDo = mustDos.find((m) => m.id === mustDoId);
     if (!mustDo) return;
 
     // Find the day index
     const dayIndex = days.findIndex((d) => d.date === dayDate);
     if (dayIndex === -1) return;
+
+    const day = days[dayIndex];
+    if (!day?.id) {
+      console.error("[v0] Cannot add to itinerary: day has no ID");
+      return;
+    }
 
     // Create activity from must-do
     const newActivity: Activity = {
@@ -324,36 +404,62 @@ export default function TripItinerary() {
       isMustDo: true,
     };
 
-    // Add to day
-    setDays((prev) => {
-      const updated = [...prev];
-      const day = { ...updated[dayIndex] };
-      day.activities = [...day.activities, newActivity];
-      updated[dayIndex] = day;
-      return updated;
-    });
-
-    // Mark must-do as added
+    // Update UI immediately - mark must-do as added
     setMustDos((prev) =>
       prev.map((m) =>
         m.id === mustDoId
-          ? {
-              ...m,
-              addedToItinerary: true,
-              addedToDay: dayDate,
-            }
+          ? { ...m, addedToItinerary: true, addedToDay: dayDate }
           : m
       )
     );
+
+    // Save to database
+    try {
+      // Save the activity to the day
+      const { id, ...activityWithoutId } = newActivity;
+      const activitiesForSave = [...day.activities, activityWithoutId as Activity];
+      const savedActivities = await TripService.saveDayActivities(day.id, activitiesForSave);
+
+      // Update days state with DB-generated IDs
+      setDays((prev) => {
+        const updated = [...prev];
+        updated[dayIndex] = { ...updated[dayIndex], activities: savedActivities };
+        return updated;
+      });
+
+      // Update must-do status in database
+      await TripService.updateMustDo(mustDoId, {
+        addedToItinerary: true,
+        addedToDay: dayDate,
+      });
+    } catch (error) {
+      console.error("[v0] Error adding to itinerary:", error);
+    }
   };
 
-  const handleDeleteMustDo = (mustDoId: string) => {
+  const handleDeleteMustDo = async (mustDoId: string) => {
+    // Store original for rollback
+    const originalMustDos = mustDos;
+
+    // Update UI immediately
     setMustDos((prev) => prev.filter((m) => m.id !== mustDoId));
+
+    // Delete from database
+    try {
+      await TripService.deleteMustDo(mustDoId);
+    } catch (error) {
+      console.error("[v0] Error deleting must-do:", error);
+      // Rollback on error
+      setMustDos(originalMustDos);
+    }
   };
 
   const handleUpdateAvatar = async (userId: string, avatarUrl: string) => {
     console.log("[v0] Attempting to save avatar for user:", userId);
     console.log("[v0] Avatar data length:", avatarUrl.length);
+
+    // Store original avatar for rollback
+    const originalAvatar = travelers.find((t) => t.id === userId)?.avatar;
 
     // Update state immediately for instant UI feedback
     setTravelers((prev) =>
@@ -369,8 +475,10 @@ export default function TripItinerary() {
       console.error("[v0] ✗ Error saving avatar:", error);
       console.error("[v0] Error details:", JSON.stringify(error, null, 2));
       alert(`Failed to save profile photo: ${error}`);
-      // Revert on error
-      loadTripData();
+      // Revert only the avatar state, not everything
+      setTravelers((prev) =>
+        prev.map((t) => (t.id === userId ? { ...t, avatar: originalAvatar } : t))
+      );
     }
   };
 
@@ -514,18 +622,33 @@ export default function TripItinerary() {
   };
 
   const handleDeleteFlight = async (flightId: string) => {
+    // Store original for rollback
+    const originalFlights = flightsList;
+
     setFlightsList((prev) => prev.filter((f) => f.id !== flightId));
-    
+
     // Save to Supabase
     try {
       await TripService.deleteFlight(flightId);
-      console.log("[v0] Flight deleted from Supabase");
     } catch (error) {
       console.error("[v0] Error deleting flight:", error);
+      // Rollback on error
+      setFlightsList(originalFlights);
     }
   };
 
   const handleDeleteActivity = async (activityId: string) => {
+    // Find the day with this activity BEFORE state update
+    const dayWithActivity = days.find((d) => d.activities.some((a) => a.id === activityId));
+    if (!dayWithActivity?.id) {
+      console.error("[v0] Cannot delete activity: day not found or has no ID");
+      return;
+    }
+
+    // Store original for rollback
+    const originalDays = days;
+    const dayId = dayWithActivity.id;
+
     let updatedDays: DayItinerary[];
     setDays((prev) => {
       updatedDays = prev.map((day) => ({
@@ -534,19 +657,17 @@ export default function TripItinerary() {
       }));
       return updatedDays;
     });
-    
-    // Save to Supabase - find the day that had this activity and save it
+
+    // Save to Supabase
     try {
-      const dayWithActivity = days.find((d) => d.activities.some((a) => a.id === activityId));
-      if (dayWithActivity) {
-        const updatedDay = updatedDays.find((d) => d.id === dayWithActivity.id);
-        if (updatedDay) {
-          await TripService.saveDayActivities(updatedDay.id, updatedDay.activities);
-          console.log("[v0] Activity deleted from Supabase");
-        }
+      const updatedDay = updatedDays.find((d) => d.id === dayId);
+      if (updatedDay) {
+        await TripService.saveDayActivities(dayId, updatedDay.activities);
       }
     } catch (error) {
       console.error("[v0] Error deleting activity:", error);
+      // Rollback on error
+      setDays(originalDays);
     }
   };
 

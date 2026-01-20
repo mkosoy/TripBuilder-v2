@@ -145,25 +145,25 @@ export const travelers: Traveler[] = [
   {
     id: "traveler-1",
     name: "Mark",
-    avatar: "/images/image.png",
+    avatar: "", // Will show initials fallback until user uploads photo
     color: "oklch(0.45 0.15 250)",
   },
   {
     id: "traveler-2",
     name: "Kylie",
-    avatar: "/images/image.png",
+    avatar: "", // Will show initials fallback until user uploads photo
     color: "oklch(0.55 0.18 180)",
   },
   {
     id: "traveler-3",
     name: "Derek",
-    avatar: "/images/image.png",
+    avatar: "", // Will show initials fallback until user uploads photo
     color: "oklch(0.65 0.12 50)",
   },
   {
     id: "traveler-4",
     name: "Julia",
-    avatar: "/images/image.png",
+    avatar: "", // Will show initials fallback until user uploads photo
     color: "oklch(0.60 0.15 320)",
   },
 ];

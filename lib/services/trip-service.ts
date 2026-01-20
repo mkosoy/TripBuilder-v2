@@ -10,13 +10,21 @@ import type {
 } from "@/lib/trip-data";
 
 let CACHED_TRIP_ID: string | null = null;
-let TRIP_ID: string | null = null;
+
+// Clear the cached trip ID - useful when switching trips or on error
+export function clearTripCache() {
+  CACHED_TRIP_ID = null;
+}
 
 async function getTripId() {
   if (CACHED_TRIP_ID) return CACHED_TRIP_ID;
-  
+
   const supabase = getSupabaseBrowserClient();
-  const { data: trips } = await supabase.from("trips").select("id").limit(1);
+  const { data: trips, error } = await supabase.from("trips").select("id").limit(1);
+  if (error) {
+    console.error("[getTripId] Error fetching trip:", error);
+    return null;
+  }
   CACHED_TRIP_ID = trips && trips.length > 0 ? trips[0].id : null;
   return CACHED_TRIP_ID;
 }
@@ -41,12 +49,12 @@ export async function loadTripData() {
 
   // Load all trip data in parallel
   const [
-    { data: days },
-    { data: flights },
-    { data: hotels },
-    { data: travelers },
-    { data: mustDos },
-    { data: savedPlaces },
+    { data: days, error: daysError },
+    { data: flights, error: flightsError },
+    { data: hotels, error: hotelsError },
+    { data: travelers, error: travelersError },
+    { data: mustDos, error: mustDosError },
+    { data: savedPlaces, error: savedPlacesError },
   ] = await Promise.all([
     supabase.from("days").select("*, activities(*)").eq("trip_id", TRIP_ID).order("date").order("time", { foreignTable: "activities", nullsFirst: true }),
     supabase.from("flights").select("*").eq("trip_id", TRIP_ID).order("date"),
@@ -55,6 +63,15 @@ export async function loadTripData() {
     supabase.from("must_dos").select("*, comments:must_do_comments(*)").eq("trip_id", TRIP_ID),
     supabase.from("saved_places").select("*").eq("trip_id", TRIP_ID),
   ]);
+
+  // Debug: Log any errors and data
+  console.log("[v0] Query results:");
+  console.log("  - days:", days?.length || 0, daysError ? `ERROR: ${daysError.message}` : "");
+  console.log("  - travelers:", travelers?.length || 0, travelersError ? `ERROR: ${travelersError.message}` : "");
+  if (travelers && travelers.length > 0) {
+    console.log("  - first traveler ID:", travelers[0].id);
+    console.log("  - first traveler name:", travelers[0].name);
+  }
 
   return {
     days: (days || []).map(transformDay),
@@ -69,26 +86,71 @@ export async function loadTripData() {
 export async function saveDayActivities(dayId: string, activities: Activity[]) {
   const supabase = getSupabaseBrowserClient();
 
-  // Delete existing activities for this day
-  await supabase.from("activities").delete().eq("day_id", dayId);
+  // Get existing activity IDs for this day
+  const { data: existingActivities } = await supabase
+    .from("activities")
+    .select("id")
+    .eq("day_id", dayId);
 
-  // Insert new activities and return them with DB-generated IDs
-  if (activities.length > 0) {
-    const { data, error } = await supabase
+  const existingIds = new Set((existingActivities || []).map((a) => a.id));
+  const newActivityIds = new Set(activities.filter((a) => a.id).map((a) => a.id));
+
+  // Delete activities that are no longer in the list
+  const idsToDelete = [...existingIds].filter((id) => !newActivityIds.has(id));
+  if (idsToDelete.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("activities")
+      .delete()
+      .in("id", idsToDelete);
+
+    if (deleteError) {
+      console.error("[saveDayActivities] Delete error:", deleteError);
+      throw deleteError;
+    }
+  }
+
+  // Separate activities into updates (have valid UUID) and inserts (new)
+  const isValidUUID = (id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+  const activitiesToUpdate = activities.filter((a) => a.id && isValidUUID(a.id) && existingIds.has(a.id));
+  const activitiesToInsert = activities.filter((a) => !a.id || !isValidUUID(a.id) || !existingIds.has(a.id));
+
+  // Update existing activities
+  for (const activity of activitiesToUpdate) {
+    const { error: updateError } = await supabase
+      .from("activities")
+      .update(transformActivityToDb(activity))
+      .eq("id", activity.id);
+
+    if (updateError) {
+      console.error("[saveDayActivities] Update error:", updateError);
+      throw updateError;
+    }
+  }
+
+  // Insert new activities
+  let insertedActivities: Activity[] = [];
+  if (activitiesToInsert.length > 0) {
+    const { data, error: insertError } = await supabase
       .from("activities")
       .insert(
-        activities.map((activity) => ({
+        activitiesToInsert.map((activity) => ({
           day_id: dayId,
           ...transformActivityToDb(activity),
         }))
       )
       .select();
 
-    if (error) throw error;
-    return data.map(transformActivityFromDb);
+    if (insertError) {
+      console.error("[saveDayActivities] Insert error:", insertError);
+      throw insertError;
+    }
+    insertedActivities = (data || []).map(transformActivityFromDb);
   }
 
-  return [];
+  // Return all activities with proper IDs
+  const updatedActivities = activitiesToUpdate.map((a) => a); // Keep existing IDs
+  return [...updatedActivities, ...insertedActivities];
 }
 
 export async function addFlight(flight: Omit<Flight, 'id'>) {
@@ -124,27 +186,96 @@ export async function deleteFlight(flightId: string) {
   if (error) throw error;
 }
 
+export async function deleteMustDo(mustDoId: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.from("must_dos").delete().eq("id", mustDoId);
+
+  if (error) {
+    console.error("[deleteMustDo] Error:", error);
+    throw error;
+  }
+}
+
 export async function updateHotel(destination: string, hotel: Hotel) {
   const supabase = getSupabaseBrowserClient();
   const TRIP_ID = await getTripId();
-  const { error } = await supabase
-    .from("hotels")
-    .update(transformHotelToDb(hotel))
-    .eq("trip_id", TRIP_ID)
-    .eq("destination", destination);
 
-  if (error) throw error;
+  // Check if hotel has a valid UUID (from database) vs a local placeholder ID
+  const isValidUUID = hotel.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(hotel.id);
+
+  if (isValidUUID) {
+    // Update by ID if we have a valid database UUID
+    const { error } = await supabase
+      .from("hotels")
+      .update(transformHotelToDb(hotel))
+      .eq("id", hotel.id);
+
+    if (error) {
+      console.error("[updateHotel] Update by ID error:", error);
+      throw error;
+    }
+  } else {
+    // Check if a hotel exists for this destination
+    const { data: existingHotels } = await supabase
+      .from("hotels")
+      .select("id")
+      .eq("trip_id", TRIP_ID)
+      .eq("destination", destination)
+      .limit(1);
+
+    if (existingHotels && existingHotels.length > 0) {
+      // Update existing hotel by destination
+      const { error } = await supabase
+        .from("hotels")
+        .update(transformHotelToDb(hotel))
+        .eq("id", existingHotels[0].id);
+
+      if (error) {
+        console.error("[updateHotel] Update error:", error);
+        throw error;
+      }
+    } else {
+      // Insert new hotel
+      const { error } = await supabase
+        .from("hotels")
+        .insert({
+          trip_id: TRIP_ID,
+          ...transformHotelToDb(hotel),
+        });
+
+      if (error) {
+        console.error("[updateHotel] Insert error:", error);
+        throw error;
+      }
+    }
+  }
 }
 
-export async function addMustDo(mustDo: MustDoItem) {
+export async function addMustDo(mustDo: Omit<MustDoItem, "id" | "votes" | "comments" | "addedToItinerary">): Promise<MustDoItem | null> {
   const supabase = getSupabaseBrowserClient();
   const TRIP_ID = await getTripId();
-  const { error} = await supabase.from("must_dos").insert({
-    trip_id: TRIP_ID,
-    ...transformMustDoToDb(mustDo),
-  });
 
-  if (error) throw error;
+  const { data, error } = await supabase.from("must_dos").insert({
+    trip_id: TRIP_ID,
+    traveler_id: mustDo.travelerId,
+    name: mustDo.name,
+    type: mustDo.type,
+    destination: mustDo.destination,
+    description: mustDo.description || null,
+    address: mustDo.address || null,
+    booking_url: mustDo.bookingUrl || null,
+    price_range: mustDo.priceRange || null,
+    notes: mustDo.notes || null,
+    votes: [],
+    added_to_itinerary: false,
+  }).select().single();
+
+  if (error) {
+    console.error("[addMustDo] Error:", error);
+    return null;
+  }
+
+  return transformMustDo(data);
 }
 
 export async function updateMustDo(mustDoId: string, mustDo: Partial<MustDoItem>) {
@@ -166,6 +297,47 @@ export async function addMustDoComment(mustDoId: string, travelerId: string, tex
   });
 
   if (error) throw error;
+}
+
+export async function addSavedPlace(place: Omit<SavedPlace, "id">): Promise<SavedPlace | null> {
+  const supabase = getSupabaseBrowserClient();
+  const TRIP_ID = await getTripId();
+
+  const { data, error } = await supabase.from("saved_places").insert({
+    trip_id: TRIP_ID,
+    name: place.name,
+    type: place.type,
+    destination: place.destination,
+    description: place.description || null,
+    address: place.address || null,
+    booking_url: place.bookingUrl || null,
+    price_range: place.priceRange || null,
+    notes: place.notes || null,
+    category: place.category,
+    avg_entree_price: place.avgEntreePrice || null,
+    popular_items: place.popularItems || null,
+    cuisine: place.cuisine || null,
+    reservation_required: place.reservationRequired || null,
+    availability_status: place.availabilityStatus || null,
+    image_url: place.imageUrl || null,
+  }).select().single();
+
+  if (error) {
+    console.error("[addSavedPlace] Error:", error);
+    return null;
+  }
+
+  return transformSavedPlace(data);
+}
+
+export async function deleteSavedPlace(placeId: string) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.from("saved_places").delete().eq("id", placeId);
+
+  if (error) {
+    console.error("[deleteSavedPlace] Error:", error);
+    throw error;
+  }
 }
 
 export async function updateTravelerAvatar(travelerId: string, avatarUrl: string) {

@@ -104,7 +104,15 @@ export function TravelersPanel({
             >
               <div className="flex flex-col items-center text-center space-y-2">
                 <Avatar className="h-12 w-12">
-                  <AvatarImage src={traveler.avatar || "/placeholder.svg"} alt={traveler.name} />
+                  {traveler.avatar && traveler.avatar.startsWith('data:') ? (
+                    <img
+                      src={traveler.avatar}
+                      alt={traveler.name}
+                      className="aspect-square size-full object-cover rounded-full"
+                    />
+                  ) : (
+                    <AvatarImage src={traveler.avatar || "/placeholder.svg"} alt={traveler.name} />
+                  )}
                   <AvatarFallback
                     className="text-white font-medium"
                     style={{ backgroundColor: traveler.color }}
